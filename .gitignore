@@ -1,7 +1,9 @@
 models/*.joblib
-models/*.csv
 models/*.png
 models/mlruns/
+models/dataset.csv
+models/dataset_subset.csv
+models/dataset_transformed.csv
 *.joblib
 mlruns/
 my_env/

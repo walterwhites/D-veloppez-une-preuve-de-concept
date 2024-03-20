@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from nltk.tokenize import sent_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+import nltk
 
 def preprocess_text(text):
     text = lowercase_text(text)

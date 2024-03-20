@@ -4,9 +4,11 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import nltk
+import zipfile
 import numpy as np
 import preprocessing
 import joblib
+import os
 from collections import Counter, OrderedDict
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
@@ -14,11 +16,24 @@ from wordcloud import WordCloud
 
 ####################################################################################################
 
+# Nom du fichier zip contenant les modèles
+models_zip_file = 'models_src.zip'
 
-nltk.download('stopwords')
+# Charger les modèles depuis le fichier zip
+with zipfile.ZipFile(models_zip_file, 'r') as zip_ref:
+    if not os.path.exists('models_src'):
+        zip_ref.extractall()
+
+relative_path_to_nltk_data = "nltk_data"
+relative_path_to_models = "models_src"
+nltk_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_nltk_data))
+models__path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
+
+nltk.data.path.append(nltk_data_path)
+
 
 # Charger les données à partir du fichier CSV
-data = pd.read_csv("models/dataset_cleaned.csv")
+data = pd.read_csv("https://raw.githubusercontent.com/walterwhites/D-veloppez-une-preuve-de-concept/main/models/dataset_cleaned.csv")
 
 # Données pour créer le WordCloud
 all_words = [word for words_list in data['title_lemmatized'] + data['body_lemmatized'] for word in str(words_list).split()]
@@ -100,18 +115,9 @@ st.pyplot(fig_sentence)
 
 
 # Charger les modèles
-combined_pipeline = joblib.load('api/app/models_src/oneVsRestClassifier_mlb_model.joblib')
-mlb = joblib.load('api/app/models_src/mlb_model.joblib')
-pipeline_xlnet = joblib.load('api/app/models_src/XLNet_custom_classification_layer_model.joblib')
-
-
-# Télécharger les données NLTK
-try:
-    nltk.download('punkt', force=True)
-    nltk.download('wordnet', force=True)
-    nltk.download('stopwords', force=True)
-except Exception as e:
-    st.error(f"Erreur lors du téléchargement des données NLTK : {e}")
+combined_pipeline = joblib.load('models_src/oneVsRestClassifier_mlb_model.joblib')
+mlb = joblib.load('models_src/mlb_model.joblib')
+pipeline_xlnet = joblib.load('models_src/XLNet_custom_classification_layer_model.joblib')
 
 # Fonction de prédiction
 def supervised_predict(title: str, body: str):
