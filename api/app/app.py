@@ -16,19 +16,19 @@ from wordcloud import WordCloud
 
 ####################################################################################################
 
+relative_path_to_models = "models_src.zip"
+models__path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
+
 # Nom du fichier zip contenant les modèles
 models_zip_file = 'models_src.zip'
 
 # Charger les modèles depuis le fichier zip
-with zipfile.ZipFile(models_zip_file, 'r') as zip_ref:
+with zipfile.ZipFile(models__path, 'r') as zip_ref:
     if not os.path.exists('models_src'):
         zip_ref.extractall()
 
 relative_path_to_nltk_data = "nltk_data"
-relative_path_to_models = "models_src"
 nltk_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_nltk_data))
-models__path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
-
 nltk.data.path.append(nltk_data_path)
 
 
