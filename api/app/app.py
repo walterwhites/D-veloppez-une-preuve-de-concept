@@ -20,7 +20,9 @@ from wordcloud import WordCloud
 relative_path_to_models = "models_src.zip"
 
 # Chemin absolu vers le fichier zip des modèles
-models_path = os.path.abspath(relative_path_to_models)
+models_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
+
+print(models_path)
 
 # Charger les modèles depuis le fichier zip
 with zipfile.ZipFile(models_path, 'r') as zip_ref:
