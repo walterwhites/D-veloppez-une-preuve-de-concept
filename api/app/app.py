@@ -16,14 +16,14 @@ from wordcloud import WordCloud
 
 ####################################################################################################
 
+# Chemin relatif vers le fichier zip des modèles
 relative_path_to_models = "models_src.zip"
-models__path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
 
-# Nom du fichier zip contenant les modèles
-models_zip_file = 'models_src.zip'
+# Chemin absolu vers le fichier zip des modèles
+models_path = os.path.abspath(relative_path_to_models)
 
 # Charger les modèles depuis le fichier zip
-with zipfile.ZipFile(models__path, 'r') as zip_ref:
+with zipfile.ZipFile(models_path, 'r') as zip_ref:
     if not os.path.exists('models_src'):
         zip_ref.extractall()
 
