@@ -17,21 +17,35 @@ from wordcloud import WordCloud
 ####################################################################################################
 
 # Chemin relatif vers le fichier zip des modèles
-relative_path_to_models = "models_src.zip"
+relative_path_to_models = "api/app/models_src.zip"
 
-# Chemin absolu vers le fichier zip des modèles
-models_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_models))
-
-print(models_path)
+current_path = os.getcwd()
+models_path = os.path.join(current_path, relative_path_to_models)
 
 # Charger les modèles depuis le fichier zip
 with zipfile.ZipFile(models_path, 'r') as zip_ref:
     if not os.path.exists('models_src'):
         zip_ref.extractall()
 
-relative_path_to_nltk_data = "nltk_data"
-nltk_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), relative_path_to_nltk_data))
-nltk.data.path.append(nltk_data_path)
+# Check if the nltk_data directory exists, if not, create it
+nltk_data_dir = os.path.abspath("nltk_data")
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+
+# Set NLTK data path to the new location
+nltk.data.path.append(nltk_data_dir)
+
+# Download NLTK data only if it doesn't exist
+if not os.path.exists(os.path.join(nltk_data_dir, "corpora", "stopwords")):
+    try:
+        nltk.download('punkt', force=True)
+        nltk.download('wordnet', force=True)
+        nltk.download('stopwords', force=True)
+    except Exception as e:
+        print(f"Error downloading NLTK data: {e}")
+else:
+    print("NLTK data already exists. Skipping download.")
+
 
 
 # Charger les données à partir du fichier CSV
