@@ -5,14 +5,72 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import nltk
 import zipfile
-import numpy as np
 import preprocessing
 import joblib
 import os
+import numpy as np
+import torch
 from collections import Counter, OrderedDict
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
+from transformers import XLNetTokenizer, XLNetForSequenceClassification
+from torch.nn import DataParallel
 
+####################################################################################################
+
+# Définition du nooveaau modèle
+tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased', max_length=128)
+model = XLNetForSequenceClassification.from_pretrained('xlnet-base-cased', num_labels=100)
+
+class XLNetPipeline:
+    def __init__(self, model):
+        self.model = model
+        self.threshold = 0.3
+        self.optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+        self.loss_fn = torch.nn.BCEWithLogitsLoss()
+
+    def fit(self, X, y, epochs=6, batch_size=4):
+        if torch.cuda.device_count() > 1:
+            print("Utilisation de", torch.cuda.device_count(), "GPUs pour l'entraînement.")
+            self.model = DataParallel(self.model)
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            for i in range(0, len(X), batch_size):
+                batch_texts = X[i:i+batch_size]
+                batch_labels = torch.tensor(y[i:i+batch_size], dtype=torch.float32)
+
+                inputs = tokenizer(batch_texts, padding=True, truncation=True, return_tensors='pt')
+                labels = batch_labels
+
+                self.optimizer.zero_grad()  # Reset le gradient
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+
+                loss = self.loss_fn(logits, labels)
+                loss.backward()  # Backpropagation
+                self.optimizer.step()
+
+                epoch_loss += loss.item()
+
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss}")
+
+
+    def predict(self, X):
+        predictions = []
+        class_counts = Counter(mlb.classes_)
+        N = 100
+        top_classes = [class_name for class_name, _ in class_counts.most_common(N)]
+        with torch.no_grad():
+            for text in X:
+                inputs = tokenizer(text, padding=True, truncation=True, return_tensors='pt')
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.sigmoid(logits).detach().numpy()
+
+                specific_class_indices = [mlb.classes_.tolist().index(cls) for cls in top_classes]
+                specific_class_probabilities = probabilities[:, specific_class_indices]
+                predictions.append(specific_class_probabilities)
+        return np.squeeze(predictions)
 
 ####################################################################################################
 
@@ -24,7 +82,7 @@ models_path = os.path.join(current_path, relative_path_to_models)
 
 # Charger les modèles depuis le fichier zip
 with zipfile.ZipFile(models_path, 'r') as zip_ref:
-    if not os.path.exists('models_src'):
+    if not os.path.exists('api/app/models_src'):
         zip_ref.extractall()
 
 # Check if the nltk_data directory exists, if not, create it
@@ -131,9 +189,9 @@ st.pyplot(fig_sentence)
 
 
 # Charger les modèles
-combined_pipeline = joblib.load('models_src/oneVsRestClassifier_mlb_model.joblib')
-mlb = joblib.load('models_src/mlb_model.joblib')
-pipeline_xlnet = joblib.load('models_src/XLNet_custom_classification_layer_model.joblib')
+combined_pipeline = joblib.load('api/app/models_src/oneVsRestClassifier_mlb_model.joblib')
+mlb = joblib.load('api/app/models_src/mlb_model.joblib')
+pipeline_xlnet = joblib.load('api/app/models_src/XLNet_custom_classification_layer_model.joblib')
 
 # Fonction de prédiction
 def supervised_predict(title: str, body: str):
@@ -179,17 +237,25 @@ if st.button('Prédire'):
 
 def XLNet_predict(title: str, body: str):
     content = title + ' ' + body
-    processed_content = preprocessing.preprocess_text(content)
+    processed_question = preprocessing.preprocess_text(content)
+    content_as_array = [title, body]
 
-    predictions_XLNet = pipeline_xlnet.predict(processed_content)
+    predictions_XLNet = pipeline_xlnet.predict(content_as_array)
 
     n_top_classes = 5
     result = []
 
-    for i, content in enumerate(processed_content):
-        top_classes_indices = np.argsort(predictions_XLNet[i])[-n_top_classes:]
-        top_tags_combined = mlb.classes_[top_classes_indices]
-        result.append(top_tags_combined)
+    # itérer sur chaque prédiction
+    for i, question in enumerate(processed_question):
+        top_classes_indices = predictions_XLNet.argsort(axis=1)[:, -n_top_classes:][i]
+        top_classes_probabilities = predictions_XLNet[i, top_classes_indices]
+
+        # Tri des classes et des probabilités par ordre décroissant de probabilité
+        sorted_indices = np.argsort(top_classes_probabilities)[::-1]
+        top_tags_combined_sorted = mlb.classes_[top_classes_indices[sorted_indices]]
+        top_classes_probabilities_sorted = top_classes_probabilities[sorted_indices]
+
+        result.append(list(zip(top_tags_combined_sorted, top_classes_probabilities_sorted)))
 
     return result
 
@@ -201,6 +267,8 @@ body = st.text_area('XLNet - Corps de la question:', height=200)
 
 if st.button('Prédire avec le modèle XLNet'):
     predictions = XLNet_predict(title, body)
-    st.write("Résultats de la prédiction :")
+    st.write("Résultats de la prédiction:")
     for i, pred in enumerate(predictions):
-        st.write(f"Prédiction {i + 1}: {', '.join(pred)}")
+        st.write(f"Prédiction {i + 1}:")
+        for tag, proba in pred:
+            st.write(f"Tag: {tag}, Probabilité: {proba}")

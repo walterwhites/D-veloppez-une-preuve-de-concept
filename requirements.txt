@@ -8,3 +8,4 @@ streamlit==1.30.0
 torch==2.0.1
 transformers==4.38.1
 wordcloud==1.9.3
+sentencepiece==0.2.0
