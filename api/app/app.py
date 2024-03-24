@@ -1,22 +1,20 @@
-#!/my_env/bin/python3
-
+import requests
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import nltk
 import zipfile
-import preprocessing
+import text_preprocessing
 import joblib
 import os
 import numpy as np
 import torch
+import shap
 from collections import Counter, OrderedDict
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
 from transformers import XLNetTokenizer, XLNetForSequenceClassification
-from torch.nn import DataParallel
-
-####################################################################################################
+from torch.nn.parallel import DataParallel
 
 # Définition du nooveaau modèle
 tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased', max_length=128)
@@ -72,29 +70,14 @@ class XLNetPipeline:
                 predictions.append(specific_class_probabilities)
         return np.squeeze(predictions)
 
-####################################################################################################
+    def parameters(self):
+        return self.model.parameters()
 
-# Chemin relatif vers le fichier zip des modèles
-relative_path_to_models = "api/app/models_src.zip"
-
-current_path = os.getcwd()
-models_path = os.path.join(current_path, relative_path_to_models)
-
-# Charger les modèles depuis le fichier zip
-with zipfile.ZipFile(models_path, 'r') as zip_ref:
-    if not os.path.exists('api/app/models_src'):
-        zip_ref.extractall()
-
-# Check if the nltk_data directory exists, if not, create it
 nltk_data_dir = os.path.abspath("nltk_data")
-if not os.path.exists(nltk_data_dir):
-    os.makedirs(nltk_data_dir)
-
-# Set NLTK data path to the new location
 nltk.data.path.append(nltk_data_dir)
 
 # Download NLTK data only if it doesn't exist
-if not os.path.exists(os.path.join(nltk_data_dir, "corpora", "stopwords")):
+if not os.path.exists(nltk_data_dir):
     try:
         nltk.download('punkt', force=True)
         nltk.download('wordnet', force=True)
@@ -105,22 +88,84 @@ else:
     print("NLTK data already exists. Skipping download.")
 
 
+models_src_dir = os.path.abspath("models_src")
 
-# Charger les données à partir du fichier CSV
+required_files = ['mlb_model.joblib', 'oneVsRestClassifier_mlb_model.joblib', 'XLNet_custom_classification_layer_model.joblib']
+
+if not os.path.exists(models_src_dir):
+    if os.path.exists('models_src.zip'):
+        print('extracting...')
+        # Load the models from the zip file
+        with zipfile.ZipFile('models_src.zip', 'r') as zip_ref:
+            zip_ref.extractall()
+
+        # Check if all required files exist after extraction
+        extracted_files = os.listdir('models_src')
+        missing_files = [file for file in required_files if file not in extracted_files]
+
+        if not missing_files:
+            print("All required files successfully extracted.")
+        else:
+            print("Error: The following required files are missing after extraction:", missing_files)
+    else:
+        print("Error: models_src.zip file not found.")
+else:
+    print("models_src already exists. Skipping download.")
+
+
+# Charger les modèles
+mlb = joblib.load('models_src/mlb_model.joblib')
+pipeline_xlnet_joblib = joblib.load('models_src/XLNet_custom_classification_layer_model.joblib')
+pipeline_multinomial_naive_bayes_joblib = joblib.load('models_src/oneVsRestClassifier_mlb_model.joblib')
+
+@st.cache_data
+def generate_wordclouds(data):
+    all_words = [word for words_list in data['title_lemmatized'] + data['body_lemmatized'] for word in str(words_list).split()]
+    title_words = [word for words_list in data['title_lemmatized'] for word in str(words_list).split()]
+    body_words = [word for words_list in data['body_lemmatized'] for word in str(words_list).split()]
+
+    wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(all_words))
+    title_wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(title_words))
+    body_wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(body_words))
+
+    return wordcloud, title_wordcloud, body_wordcloud
+
+@st.cache_data
+def generate_outliers_graph(data):
+    nltk_stopwords = set(stopwords.words('english'))
+    title_and_body_lemmatized = data['title_lemmatized'] + data['body_lemmatized']
+    all_words = [word for words_list in title_and_body_lemmatized for word in str(words_list).split()]
+    all_words_without_stopwords = [word for word in all_words if word.lower() not in nltk_stopwords]
+    word_freq = Counter(all_words_without_stopwords)
+    outliers = [word for word, freq in word_freq.items()]
+    word_freq_ordered = OrderedDict(word_freq)
+    sorted_outliers = sorted(outliers, key=lambda word: word_freq_ordered[word], reverse=True)
+    top_outliers = sorted_outliers[:30]
+    fig_outliers, ax_outliers = plt.subplots()
+    ax_outliers.bar(top_outliers, [word_freq[word] for word in top_outliers])
+    ax_outliers.set_title("Analyse des mots outliers", rotation=45)
+    ax_outliers.set_xticklabels(top_outliers, rotation=70, ha='right')
+    return fig_outliers
+
+@st.cache_data
+def generate_sentence_lengths_graph(data):
+    sentence_lengths = [len(nltk.word_tokenize(sentence)) for sentence in data['title_lemmatized'] + data['body_lemmatized']]
+    bins = range(0, 1001, 100)
+    fig_sentence, ax_sentence = plt.subplots()
+    ax_sentence.hist(sentence_lengths, bins=bins, color='skyblue', edgecolor='black')
+    ax_sentence.set_title("Distribution des longueurs de phrases")
+    ax_sentence.set_xlabel("Longueur de phrase")
+    ax_sentence.set_ylabel("Nombre de phrases")
+    return fig_sentence
+
+# Interface utilisateur avec Streamlit
+st.title("Analyse de texte et prédiction supervisée")
+
+# Charger les données
 data = pd.read_csv("https://raw.githubusercontent.com/walterwhites/D-veloppez-une-preuve-de-concept/main/models/dataset_cleaned.csv")
 
-# Données pour créer le WordCloud
-all_words = [word for words_list in data['title_lemmatized'] + data['body_lemmatized'] for word in str(words_list).split()]
-title_words = [word for words_list in data['title_lemmatized'] for word in str(words_list).split()]
-body_words = [word for words_list in data['body_lemmatized'] for word in str(words_list).split()]
-
-# Création des WordClouds
-wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(all_words))
-title_wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(title_words))
-body_wordcloud = WordCloud(width=800, height=400, max_words=100, background_color='white').generate(' '.join(body_words))
-
-# Affichage des WordClouds dans Streamlit
-st.title("Analyse des mots avec WordCloud")
+# Affichage des graphiques
+wordcloud, title_wordcloud, body_wordcloud = generate_wordclouds(data)
 st.subheader("Nuage de mots pour titre et body")
 st.image(wordcloud.to_array(), use_column_width=True, caption='Nuage de mots pour titre et body')
 
@@ -130,79 +175,25 @@ st.image(title_wordcloud.to_array(), use_column_width=True, caption='Nuage de mo
 st.subheader("Nuage de mots pour le body")
 st.image(body_wordcloud.to_array(), use_column_width=True, caption='Nuage de mots pour le body')
 
-
-####################################################################################################
-
-
-# Graph outlier 
-
-# Définir les stopwords
-nltk_stopwords = set(stopwords.words('english'))
-
-# Lemmatization et suppression des stopwords
-title_and_body_lemmatized = data['title_lemmatized'] + data['body_lemmatized']
-all_words = [word for words_list in title_and_body_lemmatized for word in str(words_list).split()]
-all_words_without_stopwords = [word for word in all_words if word.lower() not in nltk_stopwords]
-
-# Calcul des fréquences de mots
-word_freq = Counter(all_words_without_stopwords)
-outliers = [word for word, freq in word_freq.items()]
-word_freq_ordered = OrderedDict(word_freq)
-sorted_outliers = sorted(outliers, key=lambda word: word_freq_ordered[word], reverse=True)
-top_outliers = sorted_outliers[:30]
-
-# Création du graphique
-fig, ax = plt.subplots()
-ax.bar(top_outliers, [word_freq[word] for word in top_outliers])
-ax.set_title("Analyse des mots outliers", rotation=45)
-
-# Rotation des étiquettes sur l'axe des x
-ax.set_xticklabels(top_outliers, rotation=70, ha='right')
-
-# Affichage des mots outliers dans Streamlit
+fig_outliers = generate_outliers_graph(data)
 st.title("Analyse des mots outliers")
-st.pyplot(fig)
+st.pyplot(fig_outliers)
 
-
-####################################################################################################
-
-# Calcul des longueurs des phrases
-sentence_lengths = [len(nltk.word_tokenize(sentence)) for sentence in title_and_body_lemmatized]
-
-# Définition des bins de 100 en 100 jusqu'à 1000
-bins = range(0, 1001, 100)
-
-# Création du graphique pour les longueurs de phrases
-fig_sentence, ax_sentence = plt.subplots()
-ax_sentence.hist(sentence_lengths, bins=bins, color='skyblue', edgecolor='black')
-ax_sentence.set_title("Distribution des longueurs de phrases")
-ax_sentence.set_xlabel("Longueur de phrase")
-ax_sentence.set_ylabel("Nombre de phrases")
-
-# Affichage du graphique des longueurs de phrases dans Streamlit
+fig_sentence = generate_sentence_lengths_graph(data)
 st.title("Analyse des longueurs de phrases")
 st.pyplot(fig_sentence)
 
 
-
 ####################################################################################################
 
-
-# Charger les modèles
-combined_pipeline = joblib.load('api/app/models_src/oneVsRestClassifier_mlb_model.joblib')
-mlb = joblib.load('api/app/models_src/mlb_model.joblib')
-pipeline_xlnet = joblib.load('api/app/models_src/XLNet_custom_classification_layer_model.joblib')
-
-# Fonction de prédiction
-def supervised_predict(title: str, body: str):
+def original_multinomial_naive_bayes_predict(title: str, body: str):
     content = title + ' ' + body
-    processed_question = preprocessing.preprocess_text(content)
+    processed_question = text_preprocessing.preprocess_text(content)
     content_as_array = [title, body]
-
-    predictions_proba_combined = combined_pipeline.predict_proba(content_as_array)
+    print(content_as_array)
+    predictions_proba_combined = pipeline_multinomial_naive_bayes_joblib.predict_proba(content_as_array)
 
     n_top_classes = 5
-    result = []
 
     # itérer sur chaque prédiction
     for i, question in enumerate(processed_question):
@@ -214,9 +205,28 @@ def supervised_predict(title: str, body: str):
         top_tags_combined_sorted = mlb.classes_[top_classes_indices[sorted_indices]]
         top_classes_probabilities_sorted = top_classes_probabilities[sorted_indices]
 
-        result.append(list(zip(top_tags_combined_sorted, top_classes_probabilities_sorted)))
+        print(f"Tags associés pour la question '{question}':", list(zip(top_tags_combined_sorted, top_classes_probabilities_sorted)))
+        print("\n")
 
-    return result
+    return {"prediction":  list(zip(top_tags_combined_sorted, top_classes_probabilities_sorted))}
+
+
+# Fonction de prédiction
+def multinomial_naive_bayes_predict(title: str, body: str):
+    url = 'http://127.0.0.1:8000/models/multinomial_naive_bayes/predict/'
+    data = {
+        "title": title,
+        "body": body
+    }
+
+    response = requests.post(url, params=data)
+    print(response)
+
+    if response.status_code == 200:
+        return response.json().get('prediction', [])
+    else:
+        print("La requête a échoué avec le code:", response.status_code)
+        return []
 
 # Interface utilisateur avec Streamlit
 st.title("Prédiction supervisée")
@@ -225,39 +235,59 @@ title = st.text_input('Titre de la question:')
 body = st.text_area('Corps de la question:', height=200)
 
 if st.button('Prédire'):
-    predictions = supervised_predict(title, body)
+    response = original_multinomial_naive_bayes_predict(title, body)
+    predictions = response.get('prediction', [])
     st.write("Résultats de la prédiction :")
-    for i, pred in enumerate(predictions):
-        st.write(f"Prédiction {i + 1}:")
-        for tag, proba in pred:
-            st.write(f"Tag: {tag}, Probabilité: {proba}")
+    for i, (tag, proba) in enumerate(predictions):
+        st.write(f"Tag: {tag}, Probabilité: {proba}")
 
             
 ####################################################################################################
 
-def XLNet_predict(title: str, body: str):
+def original_XLNet_predict(title: str, body: str):
     content = title + ' ' + body
-    processed_question = preprocessing.preprocess_text(content)
+    processed_question = text_preprocessing.preprocess_text(content)
     content_as_array = [title, body]
 
-    predictions_XLNet = pipeline_xlnet.predict(content_as_array)
+    def predict_function(X):
+        return pipeline_xlnet_joblib.predict(X)
+
+    predictions_XLNet = pipeline_xlnet_joblib.predict(content_as_array)
 
     n_top_classes = 5
     result = []
 
-    # itérer sur chaque prédiction
+    # Iterate over each prediction
     for i, question in enumerate(processed_question):
         top_classes_indices = predictions_XLNet.argsort(axis=1)[:, -n_top_classes:][i]
         top_classes_probabilities = predictions_XLNet[i, top_classes_indices]
 
-        # Tri des classes et des probabilités par ordre décroissant de probabilité
+        # Sort classes and probabilities by descending probability
         sorted_indices = np.argsort(top_classes_probabilities)[::-1]
-        top_tags_combined_sorted = mlb.classes_[top_classes_indices[sorted_indices]]
-        top_classes_probabilities_sorted = top_classes_probabilities[sorted_indices]
+        top_tags_combined_sorted = mlb.classes_[top_classes_indices[sorted_indices]].tolist()  # Convert to list
+        top_classes_probabilities_sorted = top_classes_probabilities[sorted_indices].tolist()  # Convert to list
 
+        # Append predictions to result list
         result.append(list(zip(top_tags_combined_sorted, top_classes_probabilities_sorted)))
 
-    return result
+    return {"prediction": result}
+
+def XLNet_predict(title: str, body: str):
+    url = 'http://127.0.0.1:8000/models/xlnet/predict/'
+    data = {
+        "title": title,
+        "body": body
+    }
+    response = requests.post(url, params=data)
+
+    if response.status_code == 200:
+        return response.json().get('prediction', [])
+    else:
+        print("La requête a échoué avec le code:", response.status_code)
+        return []
+
+
+
 
 # Interface utilisateur avec Streamlit
 st.title("XLNet - Prédiction supervisée")
@@ -266,9 +296,9 @@ title = st.text_input('XLNet - Titre de la question:')
 body = st.text_area('XLNet - Corps de la question:', height=200)
 
 if st.button('Prédire avec le modèle XLNet'):
-    predictions = XLNet_predict(title, body)
-    st.write("Résultats de la prédiction:")
-    for i, pred in enumerate(predictions):
-        st.write(f"Prédiction {i + 1}:")
-        for tag, proba in pred:
+    response = original_XLNet_predict(title, body)
+    predictions = response.get('prediction', [])
+    st.write("Résultats de la prédiction :")
+    for i, pred_list in enumerate(predictions):
+        for tag, proba in pred_list:
             st.write(f"Tag: {tag}, Probabilité: {proba}")
